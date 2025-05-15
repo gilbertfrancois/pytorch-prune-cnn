@@ -54,6 +54,8 @@ In this experiment, we began by training a custom ResNet-10 architecture on the 
 *Figure 1: Prune ratio against accuracy for **structrured** pruned networks.* 
 
 
+
+
 | ![](assets/ResNet10_full_L1_norm_plot.jpg)              |
 | ------------------------------------------------------- |
 | ![](assets/ResNet10_pruned_L1_norm_plot.jpg)            |
@@ -70,6 +72,8 @@ In this experiment, we began by training a custom ResNet-10 architecture on the 
 | ![](assets/Model_layer4_0_conv1_in0.jpg) | ![](assets/Model_layer4_0_conv2_in0.jpg) |
 
 *Figure 3: Weight values (filters) of layer 1, 2, 3 and 4, channel 0 before and after unstructured pruning for Resnet10. Note that in layer 4, more than 90% has been pruned. These layers can be considered for removal.*
+
+
 
 | ![](assets/Model_SP_layer1_0_conv1_in0.jpg) | ![](assets/Model_SP_layer1_0_conv2_in0.jpg) |
 | ------------------------------------------- | ------------------------------------------- |
