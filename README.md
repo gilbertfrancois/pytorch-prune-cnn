@@ -51,7 +51,7 @@ In this experiment, we began by training a custom ResNet-10 architecture on the 
 <p align="center">
   <img src="assets/accuracy_plot.png" alt="accuracy_plot" width="400"/>
 </p>                  
-*Figure 1: Prune ratio against ccuracy for structrured pruned networks.* 
+*Figure 1: Prune ratio against accuracy for **structrured** pruned networks.* 
 
 
 | ![](assets/ResNet10_full_L1_norm_plot.jpg)              |
