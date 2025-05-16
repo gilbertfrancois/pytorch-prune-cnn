@@ -82,3 +82,29 @@ In this experiment, we began by training a custom ResNet-10 architecture on the 
 | ![](assets/Model_SP_layer4_0_conv1_in0.jpg) | ![](assets/Model_SP_layer4_0_conv2_in0.jpg) |
 
 *Figure 4: Weight values (filters) of layer 1, 2, 3 and 4, channel 0 before and after structured pruning for Resnet10. In contrast to the unstructured pruning, some filters are removed, the remaining filters stay unchanged.*
+
+
+
+## The Relationship Between Unstructured and Structured Pruning
+
+An important consideration in neural network pruning strategies is whether unstructured pruning—where individual weights are set to zero without regard to the network’s architectural structure—can serve as a beneficial preliminary step before applying structured pruning, which removes entire filters, channels, or neurons. While this sequential approach might seem intuitively promising, empirical evidence and theoretical understanding indicate that performing unstructured pruning before structured pruning generally does not enhance the effectiveness or efficiency of structured pruning, and may in some cases be counterproductive.
+
+The rationale for this lies in the nature of the two techniques. Unstructured pruning produces sparse weight matrices by targeting the least important individual weights, but it rarely results in entire filters or channels being rendered inactive. As a consequence, subsequent structured pruning finds few, if any, additional filters or channels that are composed entirely of zero weights, except in cases where unstructured pruning is applied extremely aggressively—an approach that often severely degrades model accuracy.
+
+Structured pruning, by contrast, assesses the collective importance of whole groups of parameters, such as all the weights in a filter or neuron, and removes them only when the entire group is deemed unimportant. The process is largely unaffected by the presence of scattered zeros resulting from prior unstructured pruning, since it is the aggregate, not the individual values, that determines whether a group is pruned. Therefore, applying unstructured pruning beforehand seldom influences which filters or channels are ultimately removed during structured pruning.
+
+In summary, while it is possible to combine the two methods, there is little practical or theoretical justification for doing so in most scenarios. Structured pruning alone, when guided by appropriate importance criteria and followed by fine-tuning, remains the preferred approach for achieving efficient, hardware-friendly neural network compression.
+
+
+
+## Conclusions on Pruning Methods for Neural Networks
+
+In the context of neural network optimization, pruning has emerged as a vital technique to reduce model size, potentially improve generalization, and facilitate efficient deployment. This discussion has centered around three primary approaches: unstructured pruning, structured pruning using PyTorch’s built-in utilities, and structured pruning with a community library such as Torch-Pruning.
+
+Unstructured pruning operates at the granularity of individual weights within each layer. This method selectively zeros out weights based on certain importance criteria, such as their magnitude, without regard to the overall structure of the layer. The main advantage of unstructured pruning is its simplicity and the potential for significant reductions in the number of nonzero parameters. However, because the sparsity pattern is irregular, most current deep learning hardware and libraries do not exploit these zeroed weights for computational speedup. As a result, unstructured pruning typically reduces the memory footprint of the model (if stored in a sparse format) but does not yield meaningful gains in inference speed on standard hardware. It is nevertheless a useful tool for model compression and as a regularization technique during training.
+
+Structured pruning, as implemented in PyTorch’s built-in pruning utilities, extends the idea by allowing entire filters, channels, or neurons to be pruned simultaneously. By removing coherent groups of weights, structured pruning makes it possible to reshape the model architecture itself, thus laying the foundation for genuine improvements in inference efficiency. PyTorch’s built-in tools enable this process, but with a notable limitation: after pruning, the layers remain the same shape as before, with the pruned channels simply set to zero. Consequently, although the model may become sparser and theoretically lighter, the actual computational workload during inference remains unchanged unless the model is further modified.
+
+To address this limitation, community-developed libraries such as Torch-Pruning provide advanced structured pruning capabilities that not only identify and remove redundant structures but also perform the necessary “model surgery” to reconstruct the network with reduced layer sizes. This step is critical, as it allows the resulting model to take full advantage of the computational benefits promised by structured pruning, namely, faster inference and lower memory consumption, because pruned channels and filters are physically eliminated from the architecture. These tools automate the complex task of maintaining consistency across layers after pruning, making them highly valuable for practitioners seeking to deploy efficient neural networks.
+
+In summary, unstructured pruning is effective for compressing models and can serve as a regularizer but does not accelerate inference on typical hardware. Structured pruning with PyTorch’s built-in tools allows for more hardware-friendly sparsity patterns but requires additional manual intervention for true speed gains. Structured pruning with a dedicated community library such as Torch-Pruning not only prunes but also restructures the model, enabling both compactness and real-world efficiency, thus representing the most comprehensive solution for practical deployment.
