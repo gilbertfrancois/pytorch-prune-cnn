@@ -434,6 +434,10 @@ def save_conv_filters_grid_compare(
     vmax = max(np.abs(weights_before).max(), np.abs(weights_after).max())
     vmin = -vmax
     fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+    cmap = plt.cm.seismic.copy()
+    # cmap.set_bad(color=(0.9, 0.9, 0.9, 1.0))  # Set color for NaN values
+    cmap.set_bad("white")  # Set color for NaN values
+
     for ax, weights, title in zip(
         axs,
         [weights_before, weights_after],
@@ -444,13 +448,8 @@ def save_conv_filters_grid_compare(
     ):
         out_channels, kH, kW = weights.shape
         grid_size = int(np.ceil(np.sqrt(out_channels)))
-        # Compose a large blank image for the grid
-        big_img = np.zeros((grid_size * kH, grid_size * kW))
-        for idx in range(out_channels):
-            row = idx // grid_size
-            col = idx % grid_size
-            big_img[row * kH : (row + 1) * kH, col * kW : (col + 1) * kW] = weights[idx]
-        ax.imshow(big_img, cmap="bwr", vmin=vmin, vmax=vmax)
+        big_img = grid_filters_with_separators(weights, sep=1)
+        ax.imshow(big_img, cmap=cmap, vmin=vmin, vmax=vmax)
         ax.set_title(title)
         ax.axis("off")
     plt.tight_layout()
@@ -464,129 +463,24 @@ def save_conv_filters_grid_compare(
     print(f"Saved filter grid comparison to {filename}")
 
 
-def plot_activation(model, train_loader, filename):
-    activations = {}
-
-    def get_activation(name):
-        def hook(model, input, output):
-            activations[name] = output.detach().cpu().abs().mean().item()
-
-        return hook
-
-    for name, module in model.named_modules():
-        if isinstance(module, (nn.Conv2d, nn.Linear)):
-            module.register_forward_hook(get_activation(name))
-
-    # Run a forward pass
-    model.eval()
-    with torch.no_grad():
-        for images, _ in train_loader:
-            model(images.to(next(model.parameters()).device))
-            break  # Just one batch for visualization
-    plt.figure(figsize=(10, 5))
-    plt.bar(activations.keys(), activations.values())
-    plt.ylabel("Mean Activation")
-    plt.title("Mean Activation per Layer")
-    plt.xticks(rotation=45)
-    plt.savefig(filename)
-
-
-def plot_all_conv_filters(
-    model,
-    layer_name="conv1",
-    in_channel=0,
-    before_prune=None,
-    after_prune=None,
-    title_prefix="",
-    filename=None,
-):
+def grid_filters_with_separators(filters, sep=1):
     """
-    Show all filters (output channels) of a convolutional layer for a given input channel,
-    side by side with thin separators, before and after pruning.
+    Arrange filters (out_channels, kH, kW) into a grid with a separator between each.
+    Returns a 2D numpy array ready for imshow.
     """
+    out_channels, kH, kW = filters.shape
+    grid_size = int(np.ceil(np.sqrt(out_channels)))
+    canvas_height = grid_size * kH + (grid_size - 1) * sep
+    canvas_width = grid_size * kW + (grid_size - 1) * sep
+    canvas = np.full((canvas_height, canvas_width), np.nan)  # nan for separator color
 
-    # Helper to extract weights
-    def extract_weights(state, layer_name, in_channel):
-        w = state[layer_name]  # shape: (out_ch, in_ch, kH, kW)
-        return w[:, in_channel, :, :]  # shape: (out_ch, kH, kW)
-
-    # Get weights before and after pruning
-    if before_prune is not None and after_prune is not None:
-        w_before = extract_weights(before_prune, layer_name, in_channel)
-        w_after = extract_weights(after_prune, layer_name, in_channel)
-    else:
-        module = dict(model.named_modules())[layer_name]
-        w_before = module.weight.detach().cpu().numpy()[:, in_channel, :, :]
-        w_after = w_before  # No after_prune given; use current weights
-
-    num_filters, kH, kW = w_before.shape
-    sep = 1  # 1-pixel separator
-
-    # Prepare canvas for before and after
-    def build_canvas(weights):
-        # Each filter goes side-by-side, separated by 1-pixel line
-        canvas = (
-            np.ones((kH, num_filters * kW + (num_filters - 1) * sep)) * np.nan
-        )  # nan for gray separator
-        for i in range(num_filters):
-            start = i * (kW + sep)
-            canvas[:, start : start + kW] = weights[i]
-        return canvas
-
-    canvas_before = build_canvas(w_before)
-    canvas_after = build_canvas(w_after)
-
-    vmin = min(np.nanmin(canvas_before), np.nanmin(canvas_after))
-    vmax = max(np.nanmax(canvas_before), np.nanmax(canvas_after))
-
-    fig, axs = plt.subplots(1, 2, figsize=(20, 3))
-    axs[0].imshow(canvas_before, aspect="auto", cmap="bwr", vmin=vmin, vmax=vmax)
-    axs[0].set_title(f"{title_prefix}{layer_name} (before pruning)")
-    axs[1].imshow(canvas_after, aspect="auto", cmap="bwr", vmin=vmin, vmax=vmax)
-    axs[1].set_title(f"{title_prefix}{layer_name} (after pruning)")
-    for ax in axs:
-        ax.axis("off")
-    plt.tight_layout()
-    if filename is None:
-        plt.show()
-    else:
-        plt.savefig(filename)
-
-
-def plot_conv_weights(
-    model,
-    layer_name="conv1",
-    out_channel=0,
-    in_channel=0,
-    before_prune=None,
-    after_prune=None,
-    filename=None,
-):
-    """
-    Visualize the weights of a single filter (out_channel, in_channel) before and after pruning.
-    If before_prune/after_prune are given, use those instead of current model.
-    """
-    # Fetch the weights
-    module = dict(model.named_modules())[layer_name]
-    if before_prune is not None:
-        w_before = before_prune[layer_name][out_channel, in_channel, :, :]
-    else:
-        w_before = module.weight.detach().cpu().numpy()[out_channel, in_channel, :, :]
-    if after_prune is not None:
-        w_after = after_prune[layer_name][out_channel, in_channel, :, :]
-    else:
-        w_after = module.weight.detach().cpu().numpy()[out_channel, in_channel, :, :]
-
-    fig, axs = plt.subplots(1, 2, figsize=(8, 4))
-    axs[0].imshow(w_before, cmap="bwr", interpolation="nearest")
-    axs[0].set_title("Before Pruning")
-    axs[1].imshow(w_after, cmap="bwr", interpolation="nearest")
-    axs[1].set_title("After Pruning")
-    plt.suptitle(f"{layer_name} weights: out_ch {out_channel}, in_ch {in_channel}")
-    if filename is None:
-        plt.show()
-    else:
-        plt.savefig(filename)
+    for idx in range(out_channels):
+        row = idx // grid_size
+        col = idx % grid_size
+        start_row = row * (kH + sep)
+        start_col = col * (kW + sep)
+        canvas[start_row : start_row + kH, start_col : start_col + kW] = filters[idx]
+    return canvas
 
 
 def snapshot_conv_weights(model):
@@ -676,15 +570,14 @@ if __name__ == "__main__":
     LEARNING_RATE = 1.0e-3
     MODEL_NAME = "resnet10"
 
-    TRAIN = True
-    PRUNE = False
-    PRUNE_STRUCTURED_BUILDIN = False
+    TRAIN = False
+    PRUNE = True
+    PRUNE_STRUCTURED_BUILDIN = True
     PRUNE_STRUCTURED = False
-    output_filename = "./results/ResNet10_00013_09265.pt"
+    output_filename = "./results/ResNet10_00010_09252.pt"
 
     os.makedirs("data", exist_ok=True)
     os.makedirs("plots", exist_ok=True)
-    os.makedirs("results", exist_ok=True)
 
     device = get_device()
 
@@ -700,8 +593,8 @@ if __name__ == "__main__":
             model, EPOCHS, loss_fn, optimizer, scheduler, device
         )
 
-    model = torch.load(output_filename, map_location=device, weights_only=False)
-    export_onnx(model, output_filename)
+    # model = torch.load(output_filename, map_location=device, weights_only=False)
+    # export_onnx(model, output_filename)
 
     if PRUNE:
         model = torch.load(output_filename, map_location=device, weights_only=False)
