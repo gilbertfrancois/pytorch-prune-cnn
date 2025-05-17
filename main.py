@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import time
 
@@ -81,17 +82,13 @@ def get_simpleconvnet(num_classes):
 
 def get_resnet10(num_classes):
     model = ResNet10(num_classes=num_classes)
-    model.conv1 = nn.Conv2d(
-        1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
-    )
+    model.conv1 = nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
     return model
 
 
 def get_resnet18(num_classes):
     model = resnet18(weights=None)
-    model.conv1 = nn.Conv2d(
-        1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
-    )
+    model.conv1 = nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     return model
 
@@ -112,11 +109,7 @@ def show_sample_images(training_data):
 
 def get_device(device: str | None = None) -> str:
     if device is None:
-        device = (
-            torch.accelerator.current_accelerator().type
-            if torch.accelerator.is_available()
-            else "cpu"
-        )
+        device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
     print(f"Using {device} device")
     return device
 
@@ -137,7 +130,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, device):
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
-def test_loop(dataloader, model, loss_fn, device):
+def test_loop(dataloader, model, loss_fn, device, dataset_name="Test"):
     model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -151,9 +144,7 @@ def test_loop(dataloader, model, loss_fn, device):
             correct += (pred.argmax(1) == y).type(torch.float).sum().item()
     test_loss /= num_batches
     correct /= size
-    print(
-        f"Test Error: \n Accuracy: {(100 * correct):>0.1f}%, Avg loss: {test_loss:>8f} \n"
-    )
+    print(f"{dataset_name} accuracy: {(100 * correct):>0.1f}%, Avg loss: {test_loss:>8f}")
     return correct, test_loss
 
 
@@ -162,7 +153,7 @@ def save_model(model, epoch, accuracy, extra=""):
         extra = "_" + extra
     filename = os.path.join(
         "results",
-        f"{model.__class__.__name__}{extra}_{epoch:05d}_{int(accuracy*10000):05d}.pt",
+        f"{model.__class__.__name__}{extra}_{epoch+1:05d}_{int(accuracy*10000):05d}.pt",
     )
     # torch.save(model.state_dict(), filename)
     torch.save(model, filename)
@@ -189,27 +180,130 @@ def export_onnx(model, filename):
     return filename
 
 
-def train_model(
-    model, epochs, loss_fn, optimizer, scheduler, device, filename_extra=""
-):
-    tic = time.time()
+def save_history(history, filename):
+    filename_hist = filename.replace(".pt", ".csv")
+    with open(filename_hist, "w") as f:
+        f.write("epoch,train_loss,test_loss,train_acc,test_acc\n")
+        for entry in history:
+            f.write(
+                f"{entry['epoch']:03d},{entry['train_loss']:0.8f},{entry['test_loss']:0.8f},{entry['train_acc']:0.8f},{entry['test_acc']:0.8f}\n"
+            )
+    print(f"Saved history to {filename_hist}")
+    return filename_hist
+
+
+def plot_history(history, filename):
+    """
+    Plot training / test loss and accuracy.
+    The loss curves are shown on a log10 scale.
+    """
+    log_base = 10
+    filename_hist = filename.replace(".pt", ".jpg")
+    filename_hist = os.path.join("plots", os.path.basename(filename_hist))
+    epochs = [entry["epoch"] for entry in history]
+    train_loss = [entry["train_loss"] for entry in history]
+    test_loss = [entry["test_loss"] for entry in history]
+    train_acc = [entry["train_acc"] for entry in history]
+    test_acc = [entry["test_acc"] for entry in history]
+    # guarantee strictly positive losses for log scale
+    eps = 1e-12
+    train_loss = np.maximum(train_loss, eps)
+    test_loss = np.maximum(test_loss, eps)
+    # plotting
+    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
+    # ── loss (log-scale)
+    ax[0].plot(epochs, train_loss, label="Train Loss")
+    ax[0].plot(epochs, test_loss, label="Test  Loss")
+    ax[0].set_yscale("log", base=log_base)  # ← log10 axis
+    ax[0].set_title("Loss (log$_{10}$ scale)")
+    ax[0].set_xlabel("Epoch")
+    ax[0].set_ylabel("Loss")
+    ax[0].legend()
+    # ── accuracy
+    ax[1].plot(epochs, train_acc, label="Train Acc")
+    ax[1].plot(epochs, test_acc, label="Test  Acc")
+    ax[1].set_title("Accuracy")
+    ax[1].set_xlabel("Epoch")
+    ax[1].set_ylabel("Accuracy")
+    ax[1].legend()
+    plt.tight_layout()
+    plt.savefig(filename_hist)
+    print(f"Saved history plot to {filename_hist}")
+
+
+def train_model(model, epochs, loss_fn, optimizer, scheduler, device, filename_extra=""):
     accuracy = 0
     filename = ""
+    history = []
+    tic = time.time()
     for epoch in range(epochs):
-        print(f"Epoch {epoch + 1}\n-------------------------------")
+        print(f"\nEpoch {epoch + 1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device)
-        new_accuracy, _ = test_loop(test_dataloader, model, loss_fn, device)
-        if new_accuracy > accuracy:
-            accuracy = new_accuracy
+        train_acc, train_loss = test_loop(train_dataloader, model, loss_fn, device, dataset_name="Train")
+        test_acc, test_loss = test_loop(test_dataloader, model, loss_fn, device)
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "test_loss": test_loss,
+                "train_acc": train_acc,
+                "test_acc": test_acc,
+            }
+        )
+        if test_acc > accuracy:
+            accuracy = test_acc
             filename = save_model(model, epoch, accuracy, extra=filename_extra)
         scheduler.step()
-    print("Ready")
     toc = time.time()
+    save_history(history, filename)
+    plot_history(history, filename)
+    print("Ready")
     print(f"Chrono: {toc - tic:.2f} seconds")
     return filename
 
 
-def prune_model_structured(
+def prune_model_unstructured(model, epochs, loss_fn, optimizer, scheduler, device, amount, retrain=True):
+    # Plot L1 norm of weights before pruning
+    weights_before = snapshot_all_conv_weights(model, in_channel=0)
+    plot_L1_norm_of_weights_grouped(model, "full_L1_norm", y_max=100)
+
+    # Prune
+    parameters_to_prune = []
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Conv2d, nn.Linear)):
+            parameters_to_prune.append((module, "weight"))
+    prune.global_unstructured(parameters_to_prune, pruning_method=prune.L1Unstructured, amount=amount)
+    model.to(device)
+
+    # Plot L1 norm of weights after pruning
+    weights_after = snapshot_all_conv_weights(model, in_channel=0)
+    save_all_conv_filters_grid_compare(weights_before, weights_after, out_dir="plots", model_name="Model", in_channel=0)
+    plot_L1_norm_of_weights_grouped(model, "pruned_L1_norm", y_max=100)
+
+    # Check for over-pruned layers
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Conv2d, nn.Linear)):
+            w = module.weight
+            perc = 100 * (w == 0).sum().item() / w.numel()
+            if perc > 90:
+                print(f"Layer {name} is over 90% pruned! Consider removing or reducing this layer.")
+
+    # Retrain
+    best_model_filename = ""
+    if retrain:
+        best_model_filename = train_model(
+            model,
+            epochs,
+            loss_fn,
+            optimizer,
+            scheduler,
+            device,
+            filename_extra="unstructured_pruned",
+        )
+    return best_model_filename
+
+
+def prune_model_structured_buildin(
     model,
     epochs,
     loss_fn,
@@ -218,8 +312,51 @@ def prune_model_structured(
     device,
     amount,
     retrain=True,
-    export_onnx=True,
+    remove_masks=False,
 ):
+
+    # Plot L1 norm of weights before pruning
+    weights_before = snapshot_all_conv_weights(model, in_channel=0)
+    plot_L1_norm_of_weights_grouped(model, "full_L1_norm", y_max=100)
+    y_max_plot = 100
+
+    # Prune
+    ignore_names = ["conv1", "fc"]
+    for name, module in model.named_modules():
+        # Only prune Conv2d layers that are NOT conv1 or fc
+        if isinstance(module, torch.nn.Conv2d) and name not in ignore_names:
+            prune.ln_structured(module, name="weight", amount=amount, n=1, dim=0)
+    model.to(device)
+    summary(model, input_size=(1, 1, 28, 28), device=device)
+
+    # Plot L1 norm of weights after pruning
+    weights_after = snapshot_all_conv_weights(model, in_channel=0)
+    plot_L1_norm_of_weights_grouped(model, "pruned_L1_norm", y_max=100)
+    save_all_conv_filters_grid_compare(
+        weights_before, weights_after, out_dir="plots", model_name="Model_SP", in_channel=0
+    )
+
+    # Retrain
+    best_model_filename = ""
+    if retrain:
+        best_model_filename = train_model(
+            model,
+            epochs,
+            loss_fn,
+            optimizer,
+            scheduler,
+            device,
+            filename_extra="structured_pruned_buildin",
+        )
+    if remove_masks:
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Conv2d):
+                prune.remove(module, "weight")
+    summary(model, input_size=(1, 1, 28, 28), device=device)
+    return best_model_filename
+
+
+def prune_model_structured(model, epochs, loss_fn, optimizer, scheduler, device, amount, retrain=True):
     model.to(device)
     test_loop(test_dataloader, model, loss_fn, device)
     model.to("cpu")
@@ -240,8 +377,9 @@ def prune_model_structured(
     print("Pruned model accuracy:")
     test_loop(test_dataloader, model, loss_fn, device)
     print("Retraining pruned model...")
+    best_model_filename = ""
     if retrain:
-        train_model(
+        best_model_filename = train_model(
             model,
             epochs,
             loss_fn,
@@ -250,66 +388,7 @@ def prune_model_structured(
             device,
             filename_extra=f"structured_pruned_r{int(amount*100):03d}",
         )
-
-
-def prune_model_structured_buildin(
-    model,
-    epochs,
-    loss_fn,
-    optimizer,
-    scheduler,
-    device,
-    amount,
-    retrain=True,
-    remove_masks=False,
-):
-
-    y_max_plot = 100
-    weights_before = snapshot_all_conv_weights(model, in_channel=0)
-    plot_L1_norm_of_weights_grouped(
-        model,
-        os.path.join("plots", f"{model.__class__.__name__}_full_L1_norm_plot.jpg"),
-        y_max=y_max_plot,
-    )
-
-    # Prune
-    ignore_names = ["conv1", "fc"]
-    for name, module in model.named_modules():
-        # Only prune Conv2d layers that are NOT conv1 or fc
-        if isinstance(module, torch.nn.Conv2d) and name not in ignore_names:
-            prune.ln_structured(module, name="weight", amount=amount, n=1, dim=0)
-    model.to(device)
-    summary(model, input_size=(1, 1, 28, 28), device=device)
-
-    weights_after = snapshot_all_conv_weights(model, in_channel=0)
-    save_all_conv_filters_grid_compare(
-        weights_before,
-        weights_after,
-        out_dir="plots",
-        model_name="Model_SP",
-        in_channel=0,
-    )
-
-    filename = os.path.join(
-        "plots", f"{model.__class__.__name__}_structured_pruned_L1_norm_plot.jpg"
-    )
-    plot_L1_norm_of_weights_grouped(model, filename, y_max=y_max_plot)
-
-    if retrain:
-        train_model(
-            model,
-            epochs,
-            loss_fn,
-            optimizer,
-            scheduler,
-            device,
-            filename_extra="structured_pruned",
-        )
-    if remove_masks:
-        for name, module in model.named_modules():
-            if isinstance(module, torch.nn.Conv2d):
-                prune.remove(module, "weight")
-    summary(model, input_size=(1, 1, 28, 28), device=device)
+    return best_model_filename
 
 
 def snapshot_all_conv_weights(model, in_channel=0):
@@ -348,58 +427,6 @@ def save_all_conv_filters_grid_compare(
             )
 
 
-def prune_model_unstructured(
-    model, epochs, loss_fn, optimizer, scheduler, device, amount, retrain=True
-):
-    y_max_plot = 100
-    weights_before = snapshot_all_conv_weights(model, in_channel=0)
-    plot_L1_norm_of_weights_grouped(
-        model,
-        os.path.join("plots", f"{model.__class__.__name__}_full_L1_norm_plot.jpg"),
-        y_max=y_max_plot,
-    )
-
-    # Prune
-    parameters_to_prune = []
-    for name, module in model.named_modules():
-        if isinstance(module, (nn.Conv2d, nn.Linear)):
-            parameters_to_prune.append((module, "weight"))
-    prune.global_unstructured(
-        parameters_to_prune, pruning_method=prune.L1Unstructured, amount=amount
-    )
-    model.to(device)
-
-    weights_after = snapshot_all_conv_weights(model, in_channel=0)
-    save_all_conv_filters_grid_compare(
-        weights_before, weights_after, out_dir="plots", model_name="Model", in_channel=0
-    )
-
-    filename = os.path.join(
-        "plots", f"{model.__class__.__name__}_pruned_L1_norm_plot.jpg"
-    )
-    plot_L1_norm_of_weights_grouped(model, filename, y_max=y_max_plot)
-    for name, module in model.named_modules():
-        if isinstance(module, (nn.Conv2d, nn.Linear)):
-            w = module.weight
-            perc = 100 * (w == 0).sum().item() / w.numel()
-            if perc > 90:
-                print(
-                    f"Layer {name} is over 90% pruned! Consider removing or reducing this layer."
-                )
-
-    if retrain:
-        train_model(
-            model,
-            epochs,
-            loss_fn,
-            optimizer,
-            scheduler,
-            device,
-            filename_extra="unstructured_pruned",
-        )
-    return model
-
-
 def get_layer_weights(model, layer_name, in_channel=0):
     """Extract (out_channels, kH, kW) weights for a given Conv2d layer and input channel."""
     layer = dict(model.named_modules())[layer_name]
@@ -412,9 +439,7 @@ def visualize_conv_filters_grid(weights, title="", vmax=None, vmin=None):
     """Plot all filters as small squares in a grid."""
     out_channels, kH, kW = weights.shape
     grid_size = int(np.ceil(np.sqrt(out_channels)))
-    fig, axes = plt.subplots(
-        grid_size, grid_size, figsize=(grid_size * 2, grid_size * 2)
-    )
+    fig, axes = plt.subplots(grid_size, grid_size, figsize=(grid_size * 2, grid_size * 2))
     vmax = vmax if vmax is not None else np.abs(weights).max()
     vmin = vmin if vmin is not None else -vmax
     for i, ax in enumerate(axes.flat):
@@ -427,9 +452,7 @@ def visualize_conv_filters_grid(weights, title="", vmax=None, vmin=None):
     plt.show()
 
 
-def save_conv_filters_grid_compare(
-    weights_before, weights_after, layer_name="conv", in_channel=0, filename=None
-):
+def save_conv_filters_grid_compare(weights_before, weights_after, layer_name="conv", in_channel=0, filename=None):
     """Compare before/after pruning for all filters and save to file."""
     vmax = max(np.abs(weights_before).max(), np.abs(weights_after).max())
     vmin = -vmax
@@ -492,12 +515,13 @@ def snapshot_conv_weights(model):
     return state
 
 
-def plot_L1_norm_of_weights_grouped(model, filename: str, y_max: int | None = None):
+def plot_L1_norm_of_weights_grouped(model, filename_suffix: str, y_max: int | None = None):
     """
     Plots the L1 norm of weights per output channel for each Conv2d layer,
     grouping by blocks (e.g. layer1, layer2, etc). All subplots share the same y-scale.
     """
     # Collect all conv layers and group them by block (using name pattern)
+    filename = os.path.join("plots", f"{model.__class__.__name__}_{filename_suffix}_plot.jpg")
     convs = []
     names = []
     for name, module in model.named_modules():
@@ -570,14 +594,15 @@ if __name__ == "__main__":
     LEARNING_RATE = 1.0e-3
     MODEL_NAME = "resnet10"
 
-    TRAIN = False
+    TRAIN = True
     PRUNE = True
     PRUNE_STRUCTURED_BUILDIN = True
-    PRUNE_STRUCTURED = False
-    output_filename = "./results/ResNet10_00010_09252.pt"
+    PRUNE_STRUCTURED = True
+    full_model_filename = ""
 
     os.makedirs("data", exist_ok=True)
     os.makedirs("plots", exist_ok=True)
+    os.makedirs("results", exist_ok=True)
 
     device = get_device()
 
@@ -589,20 +614,18 @@ if __name__ == "__main__":
         optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 
-        output_filename = train_model(
-            model, EPOCHS, loss_fn, optimizer, scheduler, device
-        )
+        full_model_filename = train_model(model, EPOCHS, loss_fn, optimizer, scheduler, device)
 
-    # model = torch.load(output_filename, map_location=device, weights_only=False)
-    # export_onnx(model, output_filename)
+        model = torch.load(full_model_filename, map_location=device, weights_only=False)
+        export_onnx(model, full_model_filename)
 
     if PRUNE:
-        model = torch.load(output_filename, map_location=device, weights_only=False)
+        model = torch.load(full_model_filename, map_location=device, weights_only=False)
         loss_fn = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE * 0.1)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 
-        pruned_model = prune_model_unstructured(
+        output_filename = prune_model_unstructured(
             model,
             EPOCHS // 3,
             loss_fn,
@@ -610,17 +633,20 @@ if __name__ == "__main__":
             scheduler,
             device,
             amount=0.9,
-            retrain=False,
+            retrain=True,
         )
+        if output_filename != "":
+            model = torch.load(output_filename, map_location=device, weights_only=False)
+            export_onnx(model, output_filename)
 
     if PRUNE_STRUCTURED_BUILDIN:
 
-        model = torch.load(output_filename, map_location=device, weights_only=False)
+        model = torch.load(full_model_filename, map_location=device, weights_only=False)
 
         loss_fn = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE * 0.1)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
-        prune_model_structured_buildin(
+        output_filename = prune_model_structured_buildin(
             model,
             EPOCHS,
             loss_fn,
@@ -628,24 +654,23 @@ if __name__ == "__main__":
             scheduler,
             device,
             amount=0.5,
-            retrain=False,
+            retrain=True,
         )
+        if output_filename != "":
+            model = torch.load(output_filename, map_location=device, weights_only=False)
+            export_onnx(model, output_filename)
 
     if PRUNE_STRUCTURED:
 
         for i in range(1, 10):
             amount = i / 10
 
-            # model = get_model(MODEL_NAME, num_classes=NUM_CLASSES)
-            # model.load_state_dict(torch.load(output_filename, map_location=device))
-            model = torch.load(output_filename, map_location=device, weights_only=False)
+            model = torch.load(full_model_filename, map_location=device, weights_only=False)
 
             loss_fn = nn.CrossEntropyLoss()
             optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE * 0.1)
-            scheduler = torch.optim.lr_scheduler.StepLR(
-                optimizer, step_size=5, gamma=0.5
-            )
-            prune_model_structured(
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+            output_filename = prune_model_structured(
                 model,
                 EPOCHS,
                 loss_fn,
@@ -655,3 +680,6 @@ if __name__ == "__main__":
                 amount=amount,
                 retrain=True,
             )
+            if output_filename != "":
+                model = torch.load(output_filename, map_location=device, weights_only=False)
+                export_onnx(model, output_filename)
