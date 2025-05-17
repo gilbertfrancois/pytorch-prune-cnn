@@ -4,11 +4,13 @@ _Gilbert François Duivesteijn_
 
 ## About
 
-This repository explores how to prune trained networks. For this purpose a very small ResNet10 has been chosen, trained with FashionMNIST.
+This repository explores what pruning of neural networks is and how to apply it using pyTorch. For this purpose a very small ResNet10 has been chosen, trained with FashionMNIST.
 
 ![ResNet10](assets/ResNet10_00010_09252.onnx.svg)
 
-## Unstructured Pruning (Most Common by Default)
+
+
+## Unstructured Pruning
 
 In unstructured pruning, the pruning mechanism operates at the level of individual weight elements within a tensor. For example, PyTorch's default pruning methods such as `prune.global_unstructured` or `prune.l1_unstructured` will set some individual weights to zero, regardless of their location in the weight tensor.
 
@@ -18,9 +20,42 @@ The result of unstructured pruning is that some weights within each output chann
 
 This explains why, in L1-norm per channel plots made after unstructured pruning, the bars representing each output channel's L1-norm are almost always above zero. The L1-norm for a channel is the sum of the absolute values of all its weights; as long as at least one weight remains nonzero, the L1-norm will be positive. Therefore, unstructured pruning does not remove whole channels or filters, but only zeros out some weights within each filter.
 
+### Computation of Unstructured Pruning
+
+When unstructured pruning is applied, each individual weight in the network is examined and those whose absolute value is sufficiently small are set to zero.  A convenient way to formalise this procedure is to define a global threshold $\theta>0$ and prune according to
+
+$$
+\begin{equation} W_k \;=\;  \begin{cases} 0, & \text{if }\;|W_k| < \theta,\\[4pt] W_k, & \text{otherwise}, \end{cases} \tag{1} \end{equation}
+$$
+
+where the index $k$ enumerates all scalar weights in the model.  The practical question is how to choose $\theta$ so that exactly a desired fraction—say $p\in(0,1)$—of the weights become zero.
+
+### Determining the global threshold $\theta$
+
+Let $\{|W_k|\}_{k=1}^{N}$ be the multiset of absolute weight magnitudes in a trained network containing $N$ parameters.  Arrange these values in non-decreasing order
+
+$$
+|W_{(1)}|\;\le\;|W_{(2)}|\;\le\;\dots\;\le\;|W_{(N)}|,
+\tag{2}
+$$
+
+where $W_{(1)}$ is the smallest‐magnitude weight and $W_{(N)}$ the largest.  If the goal is to prune a proportion $p$ (for example $p=0.3$ for 30 % sparsity), the threshold is chosen as the $(pN)$-th smallest magnitude:
+
+$$
+\begin{equation} \theta \;=\; |W_{(m)}|, \qquad m \;=\;\bigl\lfloor pN \bigr\rfloor. \tag{3} \end{equation} 
+$$
+
+Equation (3) states that $\theta$ is the *order statistic* corresponding to rank $m$.  All weights whose magnitude is strictly smaller than this value are pruned, while the remaining $1-p$ fraction are retained.  In code this is typically implemented by flattening the model’s parameter tensors, taking the absolute value, and applying a percentile operation.
+
+Because the rule in (1) is applied **globally** across the entire network, it tends to remove more weights from layers that contain a large number of small-magnitude parameters and fewer from layers whose weights are concentrated at larger magnitudes.  This global criterion is therefore slightly more data-driven than pruning each layer by an identical percentage, although both approaches share the same underlying thresholding principle.
+
+### Relation to sparsity
+
+After pruning, the remaining non-zero weights (a fraction $1-p$) form an irregular sparsity pattern.  Unless the inference engine supports sparse tensor kernels, the computational graph still executes dense matrix multiplications and convolutions, so the principal benefit of the thresholding strategy lies in model-size reduction rather than runtime acceleration.  Nevertheless, if the network is subsequently compressed into a sparse storage format (CSR/CSC, block sparse, etc.) or deployed on specialised hardware, the thresholding method described above yields a rigorously defined, quantifiable sparsity level that can be exploited for memory and bandwidth savings.
 
 
-## Structured Pruning (Filter/Channel Pruning)
+
+## Structured Pruning
 
 Structured pruning takes a different approach: it can remove entire filters or channels from a layer. For instance, using `prune.ln_structured` with `dim=0` in PyTorch will zero out all weights associated with a specific output channel (filter) in a convolutional layer.
 
@@ -28,9 +63,52 @@ After structured pruning, if you visualize the L1-norm per channel, you may obse
 
 Structured pruning is generally more hardware-efficient than unstructured pruning. Because whole filters or neurons are removed, it is possible to re-architect the model to physically eliminate these pruned components, which can lead to real reductions in memory and computation during inference.
 
+### Computation of L1 norm
+
+In a convolutional layer the weights are stored in a four-dimensional tensor
+
+$$
+\mathbf W\in\mathbb R^{F\times C\times K_h\times K_w},\tag{4}
+$$
+
+where $F$ denotes the number of output channels (filters), $C$ the number of input channels, and $K_h\times K_w$ the spatial dimensions of each kernel.  The entry $W_{f,c,i,j}$ is the weight that connects input channel $c$ to output channel $f$ at position $(i,j)$ in the kernel grid. To decide which filters can be removed in structured pruning one usually measures the importance of each filter by the $\ell_{1}$-norm of all its weights.  Formally, for every output channel $f$ we compute
+
+```math
+\begin{equation}
+\|\mathbf W_{f,:,:,:}\|_{1}
+    =\sum_{c=1}^{C}\sum_{i=1}^{K_h}\sum_{j=1}^{K_w}
+      \bigl|\,W_{f,c,i,j}\bigr|.
+\tag{5}
+\end{equation}
+```
+
+Equation (5) is simply the sum of absolute values inside filter $f$; filters with the smallest value are considered least influential on the network’s output and are prime candidates for removal.  If one needs a single diagnostic number for the whole layer, the individual norms can be accumulated,
+
+```math
+\begin{equation}
+\|\mathbf W\|_{1}^{\text{layer}}
+   =\sum_{f=1}^{F}\|\mathbf W_{f,:,:,:}\|_{1},
+\tag{6}
+\end{equation}
+```
+
+although expression (6) is rarely used for pruning decisions. The quantity in (5) is a specific instance of the general $p$-norm
+
+```math
+\begin{equation}
+\|\mathbf x\|_{p}=\Bigl(\sum_k|x_k|^{p}\Bigr)^{1/p},\tag{7}
+\end{equation}
+```
+
+with $p=1$.  Choosing $p=2$ yields an Euclidean criterion that has also been explored (e.g. in geometric-median pruning), but the $\ell_{1}$ norm remains popular because it is computationally cheap and empirically reliable.
+
+Magnitude-based structured pruning works well in practice for several reasons.  Training with weight decay or explicit $\ell_{1}$ regularisation tends to push many weights towards zero, so the resulting network already contains near-redundant filters whose total weight magnitude is small.  Removing such filters rarely alters the feature hierarchy learned by deeper layers, yet it immediately reduces the number of multiply-accumulate operations once the pruned architecture is rebuilt.  Moreover, the criterion requires only the weight tensor and therefore imposes negligible overhead compared with second-order or sensitivity-based methods.
+
+A concise introduction to magnitude-based filter pruning was provided by Li et al. (2017), who demonstrated that eliminating up to 30 % of the filters by the rule (7) incurred little or no accuracy loss on ImageNet-scale networks.  Earlier work by Han et al. (2015) applied a similar idea to unstructured weight pruning, and subsequent studies such as He et al. (2019) refined the concept with alternative norms and selection heuristics.  Together these contributions established $\ell_{1}$-norm filter ranking as a standard baseline for structured model compression.
 
 
-## Experimental results of unstructured pruning
+
+## Experimental results
 
 In this experiment, we began by training a custom ResNet-10 architecture on the Fashion-MNIST dataset, allowing the model to learn useful features for classifying grayscale clothing images. After achieving a well-performing baseline, we applied unstructured pruning to the trained network to induce sparsity in the model’s weights. To analyze the effect of pruning, we first visualized the L1-norms of the weights for each layer, which provided insight into the importance and sparsity of individual channels. We also generated activation plots to observe how the responses of different layers changed due to pruning. Furthermore, for a more detailed understanding, we visualized all filters corresponding to input channel 0 for each convolutional layer, both before and after pruning, allowing us to directly observe which parts of the model had significant weights set to zero. After this analysis, we retrained (fine-tuned) the pruned model and compared its test accuracy to that of the original unpruned model, evaluating how well the pruned network could recover its performance.
 
@@ -108,3 +186,11 @@ Structured pruning, as implemented in PyTorch’s built-in pruning utilities, ex
 To address this limitation, community-developed libraries such as Torch-Pruning provide advanced structured pruning capabilities that not only identify and remove redundant structures but also perform the necessary “model surgery” to reconstruct the network with reduced layer sizes. This step is critical, as it allows the resulting model to take full advantage of the computational benefits promised by structured pruning, namely, faster inference and lower memory consumption, because pruned channels and filters are physically eliminated from the architecture. These tools automate the complex task of maintaining consistency across layers after pruning, making them highly valuable for practitioners seeking to deploy efficient neural networks.
 
 In summary, unstructured pruning is effective for compressing models and can serve as a regularizer but does not accelerate inference on typical hardware. Structured pruning with PyTorch’s built-in tools allows for more hardware-friendly sparsity patterns but requires additional manual intervention for true speed gains. Structured pruning with a dedicated community library such as Torch-Pruning not only prunes but also restructures the model, enabling both compactness and real-world efficiency, thus representing the most comprehensive solution for practical deployment.
+
+
+
+## References
+
+* Han, S., Pool, J., Tran, J. & Dally, W. (2015). *Learning Both Weights and Connections for Efficient Neural Networks*. Advances in Neural Information Processing Systems.
+* Li, H., Kadav, A., Durdanovic, I., Samet, H. & Graf, H. (2017). *Pruning Filters for Efficient ConvNets*. International Conference on Learning Representations.
+* He, Y., Kang, G., Dong, X., Fang, Y., Yan, Y. & Yang, Y. (2019). *Filter Pruning via Geometric Median for Deep CNNs*. IEEE/CVF Conference on Computer Vision and Pattern Recognition.
