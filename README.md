@@ -27,7 +27,7 @@ When unstructured pruning is applied, each individual weight in the network is e
 $$
 W_k =
 \begin{cases}
-0, & |W_k| < \theta,\\[4pt]
+0, & |W_k| < \theta,\\
 W_k, & \text{otherwise}.
 \end{cases}
 $$
