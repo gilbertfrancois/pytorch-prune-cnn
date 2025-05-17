@@ -25,7 +25,11 @@ This explains why, in L1-norm per channel plots made after unstructured pruning,
 When unstructured pruning is applied, each individual weight in the network is examined and those whose absolute value is sufficiently small are set to zero.  A convenient way to formalise this procedure is to define a global threshold $\theta>0$ and prune according to
 
 $$
-\begin{equation} W_k \;=\;  \begin{cases} 0, & \text{if }\;|W_k| < \theta,\\[4pt] W_k, & \text{otherwise}, \end{cases} \tag{1} \end{equation}
+W_k =
+\begin{cases}
+0, & |W_k| < \theta,\\[4pt]
+W_k, & \text{otherwise}.
+\end{cases}
 $$
 
 where the index $k$ enumerates all scalar weights in the model.  The practical question is how to choose $\theta$ so that exactly a desired fraction—say $p\in(0,1)$—of the weights become zero.
@@ -35,14 +39,13 @@ where the index $k$ enumerates all scalar weights in the model.  The practical q
 Let $\{|W_k|\}_{k=1}^{N}$ be the multiset of absolute weight magnitudes in a trained network containing $N$ parameters.  Arrange these values in non-decreasing order
 
 $$
-|W_{(1)}|\;\le\;|W_{(2)}|\;\le\;\dots\;\le\;|W_{(N)}|,
-\tag{2}
+|W_{(1)}|\le|W_{(2)}|\le\dots\le|W_{(N)}|,
 $$
 
 where $W_{(1)}$ is the smallest‐magnitude weight and $W_{(N)}$ the largest.  If the goal is to prune a proportion $p$ (for example $p=0.3$ for 30 % sparsity), the threshold is chosen as the $(pN)$-th smallest magnitude:
 
 $$
-\begin{equation} \theta \;=\; |W_{(m)}|, \qquad m \;=\;\bigl\lfloor pN \bigr\rfloor. \tag{3} \end{equation} 
+\theta = |W_{(m)}|, \qquad m =\bigl\lfloor pN \bigr\rfloor.
 $$
 
 Equation (3) states that $\theta$ is the *order statistic* corresponding to rank $m$.  All weights whose magnitude is strictly smaller than this value are pruned, while the remaining $1-p$ fraction are retained.  In code this is typically implemented by flattening the model’s parameter tensors, taking the absolute value, and applying a percentile operation.
@@ -68,36 +71,30 @@ Structured pruning is generally more hardware-efficient than unstructured prunin
 In a convolutional layer the weights are stored in a four-dimensional tensor
 
 $$
-\mathbf W\in\mathbb R^{F\times C\times K_h\times K_w},\tag{4}
+\mathbf W\in\mathbb R^{F\times C\times K_h\times K_w},
 $$
 
 where $F$ denotes the number of output channels (filters), $C$ the number of input channels, and $K_h\times K_w$ the spatial dimensions of each kernel.  The entry $W_{f,c,i,j}$ is the weight that connects input channel $c$ to output channel $f$ at position $(i,j)$ in the kernel grid. To decide which filters can be removed in structured pruning one usually measures the importance of each filter by the $\ell_{1}$-norm of all its weights.  Formally, for every output channel $f$ we compute
 
 ```math
-\begin{equation}
+
 \|\mathbf W_{f,:,:,:}\|_{1}
-    =\sum_{c=1}^{C}\sum_{i=1}^{K_h}\sum_{j=1}^{K_w}
-      \bigl|\,W_{f,c,i,j}\bigr|.
-\tag{5}
-\end{equation}
+=\sum_{c=1}^{C}\sum_{i=1}^{K_h}\sum_{j=1}^{K_w}
+      \bigl|W_{f,c,i,j}\bigr|
+
 ```
 
 Equation (5) is simply the sum of absolute values inside filter $f$; filters with the smallest value are considered least influential on the network’s output and are prime candidates for removal.  If one needs a single diagnostic number for the whole layer, the individual norms can be accumulated,
 
 ```math
-\begin{equation}
 \|\mathbf W\|_{1}^{\text{layer}}
    =\sum_{f=1}^{F}\|\mathbf W_{f,:,:,:}\|_{1},
-\tag{6}
-\end{equation}
 ```
 
 although expression (6) is rarely used for pruning decisions. The quantity in (5) is a specific instance of the general $p$-norm
 
 ```math
-\begin{equation}
-\|\mathbf x\|_{p}=\Bigl(\sum_k|x_k|^{p}\Bigr)^{1/p},\tag{7}
-\end{equation}
+\|\mathbf x\|_{p}=\Bigl(\sum_k|x_k|^{p}\Bigr)^{1/p},
 ```
 
 with $p=1$.  Choosing $p=2$ yields an Euclidean criterion that has also been explored (e.g. in geometric-median pruning), but the $\ell_{1}$ norm remains popular because it is computationally cheap and empirically reliable.
