@@ -1,0 +1,43 @@
+[tool.black]
+line-length = 120
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+py_version = 3.12
+
+[tool.pylint.main]
+py-version = "3.12"
+disable = ["raw-checker-failed", "bad-inline-option", "locally-disabled", "file-ignored", "suppressed-message", "useless-suppression", "deprecated-pragma", "use-symbolic-message-instead", "line-too-long", "missing-function-docstring", "missing-class-docstring", "missing-module-docstring"]
+good-names = ["Run", "_", "a", "b", "c", "d", "e", "ex", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]
+output-format = "colorized"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning:google\\.protobuf\\..*"
+]
+
+
+[tool.poetry]
+name = "pytorch-prune-cnn"
+version = "0.1.0"
+package-mode = false
+description = ""
+authors = ["Gilbert Francois Duivesteijn <info@gilbertfrancois.com>"]
+license = "Apache"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+torch = "^2.7.0"
+torchvision = "^0.22.0"
+torchinfo = "^1.8.0"
+torch-pruning = "^1.5.2"
+matplotlib = "^3.10.3"
+onnx = "^1.18.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
