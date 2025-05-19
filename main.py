@@ -110,6 +110,9 @@ def show_sample_images(training_data):
 def get_device(device: str | None = None) -> str:
     if device is None:
         device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+    if device == "cuda":
+        for i in range(torch.cuda.device_count()):
+            print(f"Device {i}: {torch.cuda.get_device_name(i)}")
     print(f"Using {device} device")
     return device
 
